@@ -89,10 +89,7 @@ def send_message(bot: telebot.TeleBot, message: str) -> None:
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
         logger.info(f"Бот успешно отправил сообщение: '{message}'")
-    except (
-        telebot.apihelper.ApiException,
-        telebot.apihelper.NetworkException
-    ) as error:
+    except telebot.TeleBotException as error:
         raise TelegramSendMessageError(
             f"Ошибка отправки сообщения в Telegram: {error}"
         )
@@ -122,11 +119,10 @@ def get_api_answer(timestamp: int) -> dict:
             params=params,
             timeout=10
         )
-        status_message = (
+        logger.debug(
             f"Получен ответ от API: статус {response.status_code} - "
             f"{response.reason}"
         )
-        logger.debug(status_message)
     except requests.RequestException as error:
         raise ConnectionError(f"Ошибка при запросе к API: {error}")
 
@@ -236,14 +232,16 @@ def main():
             if homeworks:
                 homework = homeworks[0]
                 message = parse_status(homework)
-                with suppress(TelegramSendMessageError):
-                    send_message(bot, message)
+                send_message(bot, message)
                 timestamp = response.get('current_date', int(time.time()))
             else:
                 logger.debug('Новых статусов нет.')
+                timestamp = response.get('current_date', int(time.time()))
 
             last_error = None
 
+        except TelegramSendMessageError as error:
+            logger.error(f"Ошибка отправки сообщения в Telegram: {error}")
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logger.error(message)
