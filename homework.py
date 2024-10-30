@@ -3,6 +3,7 @@ import os
 import sys
 import time
 from http import HTTPStatus
+from contextlib import suppress
 
 import requests
 import telebot
@@ -88,10 +89,12 @@ def send_message(bot: telebot.TeleBot, message: str) -> None:
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
         logger.info(f"Бот успешно отправил сообщение: '{message}'")
-    except telebot.apihelper.ApiException as error:
-        logger.error(f"Не удалось отправить сообщение в Telegram: {error}")
+    except (
+        telebot.apihelper.ApiException,
+        telebot.apihelper.NetworkException
+    ) as error:
         raise TelegramSendMessageError(
-            f"Не удалось отправить сообщение в Telegram: {error}"
+            f"Ошибка отправки сообщения в Telegram: {error}"
         )
 
 
@@ -107,7 +110,8 @@ def get_api_answer(timestamp: int) -> dict:
 
     Raises:
         ConnectionError: Если не удалось подключиться к API.
-        ValueError: Если ответ API имеет неверный статус.
+        ValueError: Если ответ API имеет неверный статус
+                    или некорректный формат.
     """
     params = {'from_date': timestamp}
     logger.debug(f"Отправка запроса к API: {ENDPOINT} с параметрами {params}")
@@ -123,9 +127,7 @@ def get_api_answer(timestamp: int) -> dict:
             f"{response.reason}"
         )
         logger.debug(status_message)
-
     except requests.RequestException as error:
-        logger.error(f"Ошибка при запросе к API: {error}")
         raise ConnectionError(f"Ошибка при запросе к API: {error}")
 
     if response.status_code != HTTPStatus.OK:
@@ -133,14 +135,9 @@ def get_api_answer(timestamp: int) -> dict:
             f"Эндпоинт {ENDPOINT} недоступен. "
             f"Код ответа API: {response.status_code} - {response.reason}"
         )
-        logger.error(error_msg)
         raise ValueError(error_msg)
 
-    try:
-        return response.json()
-    except ValueError as error:
-        logger.error(f"Ошибка декодирования JSON: {error}")
-        raise ValueError(f"Ошибка декодирования JSON: {error}")
+    return response.json()
 
 
 def check_response(response: dict) -> list:
@@ -160,12 +157,10 @@ def check_response(response: dict) -> list:
     logger.debug("Проверка структуры ответа API.")
     if not isinstance(response, dict):
         error_msg = f"Ожидался словарь, получен {type(response)}."
-        logger.error(error_msg)
         raise TypeError(error_msg)
 
     if 'homeworks' not in response:
         error_msg = "В ответе API отсутствует ключ 'homeworks'."
-        logger.error(error_msg)
         raise KeyError(error_msg)
 
     homeworks = response['homeworks']
@@ -173,7 +168,6 @@ def check_response(response: dict) -> list:
         error_msg = (
             f"'homeworks' должен быть списком, получен {type(homeworks)}."
         )
-        logger.error(error_msg)
         raise TypeError(error_msg)
 
     logger.debug(f"Количество домашних работ в ответе: {len(homeworks)}")
@@ -199,7 +193,6 @@ def parse_status(homework: dict) -> str:
     for key in required_keys:
         if key not in homework:
             error_msg = f"В данных домашней работы отсутствует ключ '{key}'."
-            logger.error(error_msg)
             raise KeyError(error_msg)
 
     status = homework['status']
@@ -207,7 +200,6 @@ def parse_status(homework: dict) -> str:
 
     if status not in HOMEWORK_VERDICTS:
         error_msg = f"Неизвестный статус домашней работы: {status}"
-        logger.error(error_msg)
         raise ValueError(error_msg)
 
     verdict = HOMEWORK_VERDICTS[status]
@@ -244,24 +236,21 @@ def main():
             if homeworks:
                 homework = homeworks[0]
                 message = parse_status(homework)
-                send_message(bot, message)
+                with suppress(TelegramSendMessageError):
+                    send_message(bot, message)
                 timestamp = response.get('current_date', int(time.time()))
             else:
                 logger.debug('Новых статусов нет.')
 
             last_error = None
 
-        except (ConnectionError, ValueError, KeyError) as error:
+        except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logger.error(message)
-            if last_error != str(error):
-                try:
+            if last_error != message:
+                with suppress(TelegramSendMessageError):
                     send_message(bot, message)
-                except TelegramSendMessageError:
-                    logger.error(
-                        "Не удалось отправить сообщение об ошибке в Telegram."
-                    )
-                last_error = str(error)
+                last_error = message
         finally:
             time.sleep(RETRY_PERIOD)
 
