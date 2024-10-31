@@ -87,9 +87,15 @@ def send_message(bot: telebot.TeleBot, message: str) -> None:
     """
     logger.debug(f"Попытка отправить сообщение: '{message}'")
     try:
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+        bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+            text=message
+        )
         logger.info(f"Бот успешно отправил сообщение: '{message}'")
-    except telebot.TeleBotException as error:
+    except (
+        telebot.apihelper.ApiException,
+        requests.RequestException
+    ) as error:
         raise TelegramSendMessageError(
             f"Ошибка отправки сообщения в Telegram: {error}"
         )
@@ -108,7 +114,7 @@ def get_api_answer(timestamp: int) -> dict:
     Raises:
         ConnectionError: Если не удалось подключиться к API.
         ValueError: Если ответ API имеет неверный статус
-                    или некорректный формат.
+        или некорректный формат.
     """
     params = {'from_date': timestamp}
     logger.debug(f"Отправка запроса к API: {ENDPOINT} с параметрами {params}")
@@ -127,11 +133,10 @@ def get_api_answer(timestamp: int) -> dict:
         raise ConnectionError(f"Ошибка при запросе к API: {error}")
 
     if response.status_code != HTTPStatus.OK:
-        error_msg = (
+        raise ValueError(
             f"Эндпоинт {ENDPOINT} недоступен. "
             f"Код ответа API: {response.status_code} - {response.reason}"
         )
-        raise ValueError(error_msg)
 
     return response.json()
 
@@ -152,19 +157,16 @@ def check_response(response: dict) -> list:
     """
     logger.debug("Проверка структуры ответа API.")
     if not isinstance(response, dict):
-        error_msg = f"Ожидался словарь, получен {type(response)}."
-        raise TypeError(error_msg)
+        raise TypeError(f"Ожидался словарь, получен {type(response)}.")
 
     if 'homeworks' not in response:
-        error_msg = "В ответе API отсутствует ключ 'homeworks'."
-        raise KeyError(error_msg)
+        raise KeyError("В ответе API отсутствует ключ 'homeworks'.")
 
     homeworks = response['homeworks']
     if not isinstance(homeworks, list):
-        error_msg = (
+        raise TypeError(
             f"'homeworks' должен быть списком, получен {type(homeworks)}."
         )
-        raise TypeError(error_msg)
 
     logger.debug(f"Количество домашних работ в ответе: {len(homeworks)}")
     return homeworks
@@ -188,15 +190,15 @@ def parse_status(homework: dict) -> str:
     required_keys = ['status', 'homework_name']
     for key in required_keys:
         if key not in homework:
-            error_msg = f"В данных домашней работы отсутствует ключ '{key}'."
-            raise KeyError(error_msg)
+            raise KeyError(
+                f"В данных домашней работы отсутствует ключ '{key}'."
+            )
 
     status = homework['status']
     homework_name = homework['homework_name']
 
     if status not in HOMEWORK_VERDICTS:
-        error_msg = f"Неизвестный статус домашней работы: {status}"
-        raise ValueError(error_msg)
+        raise ValueError(f"Неизвестный статус домашней работы: {status}")
 
     verdict = HOMEWORK_VERDICTS[status]
     message = f'Изменился статус проверки работы "{homework_name}". {verdict}'
@@ -233,11 +235,10 @@ def main():
                 homework = homeworks[0]
                 message = parse_status(homework)
                 send_message(bot, message)
-                timestamp = response.get('current_date', int(time.time()))
             else:
                 logger.debug('Новых статусов нет.')
-                timestamp = response.get('current_date', int(time.time()))
 
+            timestamp = response.get('current_date', int(time.time()))
             last_error = None
 
         except TelegramSendMessageError as error:
